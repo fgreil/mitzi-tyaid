@@ -54,32 +54,22 @@ static T9Cursor t9_cursor = {0, 0};
 
 static void t9_draw_callback(Canvas* canvas, void* context) {
     TypeAidApp* app = context;
-    
     if(!app) {
         return;
-    }
-    
+    }  
     canvas_clear(canvas);
-    
-    // Draw icon and title at the top
-    canvas_draw_icon(canvas, 1, 1, &I_icon_10x10);
-    canvas_set_font(canvas, FontPrimary);
-    canvas_draw_str_aligned(canvas, 12, 1, AlignLeft, AlignTop, "Type Aid v0.1");
-    
-    // Draw horizontal line at 1/3 height (64/3 ≈ 21)
-    const uint8_t divider_y = 21;
-    canvas_draw_line(canvas, 0, divider_y, 128, divider_y);
-    
-    // Display current text buffer above the line
-    canvas_set_font(canvas, FontSecondary);
+	// Display current text buffer 
     if(strlen(app->text_buffer) > 0) {
-        canvas_draw_str_aligned(canvas, 2, 13, AlignLeft, AlignTop, app->text_buffer);
-    }
+        canvas_draw_str_aligned(canvas, 0, 1, AlignLeft, AlignTop, app->text_buffer);
+    }   
+    // Draw horizontal line 
+    const uint8_t divider_y = 18;
+    canvas_draw_line(canvas, 0, divider_y, 128, divider_y);
     
     // Draw the three lines of letters below the divider
     const uint8_t start_y = divider_y + 8;
-    const uint8_t line_spacing = 12;
-    const uint8_t char_spacing = 10;
+    const uint8_t line_spacing = 8;
+    const uint8_t char_spacing = 8;
     const uint8_t start_x = 2;
     
     for(uint8_t line = 0; line < 3; line++) {
@@ -172,7 +162,7 @@ static void splash_draw_callback(Canvas* canvas, void* context) {
     if(!app->keyboard_used){
         canvas_draw_icon(canvas, 50, 1, &I_splash);
 		canvas_set_font_direction(canvas, CanvasDirectionBottomToTop); // Set text rotation to 90 degrees 
-		canvas_draw_str(canvas, 128, 55, "f418.eu");		
+		canvas_draw_str(canvas, 128, 48, "f418.eu");		
 		canvas_set_font_direction(canvas, CanvasDirectionLeftToRight); // Reset to normal text direction
     }
     // Draw icon and title at the top
@@ -227,13 +217,14 @@ static void splash_draw_callback(Canvas* canvas, void* context) {
         }
     } else {
         // Show placeholder text when no input yet
-        canvas_draw_str_aligned(canvas, 1, 17, AlignLeft, AlignTop, "Just another");
-        canvas_draw_str_aligned(canvas, 1, 26, AlignLeft, AlignTop, "keyboard?");
+        canvas_draw_str_aligned(canvas, 1, 17, AlignLeft, AlignTop, "Try different");
+        canvas_draw_str_aligned(canvas, 1, 26, AlignLeft, AlignTop, "keyboards");
     }	
 	
 
     // Draw navigation hints at bottom
-    elements_button_center(canvas, "OK");
+    elements_button_center(canvas, "New");
+	elements_button_right(canvas, "Dflt");
 	canvas_draw_icon(canvas, 1, 55, &I_back);
 	canvas_draw_str_aligned(canvas, 11, 63, AlignLeft, AlignBottom, "Exit");	
     
