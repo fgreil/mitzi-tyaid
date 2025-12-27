@@ -50,6 +50,10 @@ typedef struct {
 	char cached_suggestions[T9PLUS_MAX_SUGGESTIONS][T9PLUS_MAX_WORD_LENGTH];
 	uint8_t cached_suggestion_count;
 	char last_buffer_for_suggestions[TEXT_BUFFER_SIZE];  // Track when to update suggestions
+	
+	// Suggestion selection state
+	int8_t selected_suggestion;  // -1 = none, 0-2 = suggestion index
+	char original_word[TEXT_BUFFER_SIZE];  // Store original typed text before previewing suggestions
 } TypeAidApp;
 
 // ============================================================================
@@ -87,23 +91,35 @@ static void t9_draw_callback(Canvas* canvas, void* context) {
 	}
 	
     // Draw word suggestions or error message between buffer and divider
-    canvas_set_font(canvas, FontSecondary);
-    const uint8_t sugg_y = divider_y - 3;
+    const uint8_t sugg_y = divider_y -3;
     
     // Check for error message first
     const char* error_msg = t9plus_get_error_message();
     if(error_msg != NULL) {
         // Display error message
+        canvas_set_font(canvas, FontSecondary);
         canvas_draw_str(canvas, 2, sugg_y, error_msg);
-    } else if(strlen(app->text_buffer) > 0 && app->cached_suggestion_count > 0) {
-        // Display suggestions (using cached suggestions)
-        FuriString* sugg_str = furi_string_alloc();
+    } else if(app->cached_suggestion_count > 0) {
+        // Display suggestions with highlighting for selected one
+        uint8_t x_pos = 2;
         for(uint8_t i = 0; i < app->cached_suggestion_count; i++) {
-            if(i > 0) furi_string_cat(sugg_str, "  ");
-            furi_string_cat(sugg_str, app->cached_suggestions[i]);
+            // Use bold font for selected suggestion
+            if(i == app->selected_suggestion) {
+                canvas_set_font(canvas, FontPrimary);
+            } else {
+                canvas_set_font(canvas, FontSecondary);
+            }
+            
+            canvas_draw_str(canvas, x_pos, sugg_y, app->cached_suggestions[i]);
+            x_pos += strlen(app->cached_suggestions[i]) * 6 + 4;  // Approximate spacing
+            
+            // Add separator between suggestions
+            if(i < app->cached_suggestion_count - 1) {
+                canvas_set_font(canvas, FontSecondary);
+                canvas_draw_str(canvas, x_pos, sugg_y, " ");
+                x_pos += 4;
+            }
         }
-        canvas_draw_str(canvas, 2, sugg_y, furi_string_get_cstr(sugg_str));
-        furi_string_free(sugg_str);
     }
     
 	// Draw the three lines of letters below the divider
@@ -183,6 +199,94 @@ static void t9_input_callback(InputEvent* input_event, void* context) {
 // T9-MINUS SCREEN - NAVIGATION
 // ============================================================================
 
+// Forward declaration
+static void t9_update_suggestions(TypeAidApp* app);
+
+// Helper function to get the last word position in buffer
+static size_t get_last_word_start(const char* buffer) {
+    size_t len = strlen(buffer);
+    if(len == 0) return 0;
+    
+    // Find the start of the last word
+    size_t pos = len;
+    while(pos > 0 && buffer[pos - 1] != ' ') {
+        pos--;
+    }
+    return pos;
+}
+
+// Helper function to replace last word in buffer with suggestion
+static void replace_last_word_with_suggestion(TypeAidApp* app, const char* suggestion) {
+    size_t last_word_pos = get_last_word_start(app->text_buffer);
+    
+    // Copy everything before the last word
+    char new_buffer[TEXT_BUFFER_SIZE];
+    strncpy(new_buffer, app->text_buffer, last_word_pos);
+    new_buffer[last_word_pos] = '\0';
+    
+    // Manually append the suggestion (avoiding strncat)
+    size_t current_len = strlen(new_buffer);
+    size_t suggestion_len = strlen(suggestion);
+    size_t space_left = TEXT_BUFFER_SIZE - current_len - 1;
+    
+    if(suggestion_len > space_left) {
+        suggestion_len = space_left;
+    }
+    
+    memcpy(new_buffer + current_len, suggestion, suggestion_len);
+    new_buffer[current_len + suggestion_len] = '\0';
+    
+    // Update buffer
+    strncpy(app->text_buffer, new_buffer, TEXT_BUFFER_SIZE - 1);
+    app->text_buffer[TEXT_BUFFER_SIZE - 1] = '\0';
+}
+
+// Helper function to cycle through suggestions
+static void t9_cycle_suggestion(TypeAidApp* app) {
+    if(app->cached_suggestion_count == 0) {
+        return;  // No suggestions to cycle through
+    }
+    
+    // Save original word on first cycle
+    if(app->selected_suggestion == -1) {
+        size_t last_word_pos = get_last_word_start(app->text_buffer);
+        strncpy(app->original_word, app->text_buffer + last_word_pos, TEXT_BUFFER_SIZE - 1);
+        app->original_word[TEXT_BUFFER_SIZE - 1] = '\0';
+    }
+    
+    // Move to next suggestion
+    app->selected_suggestion++;
+    
+    // Wrap around: after last suggestion, go back to original
+    if(app->selected_suggestion >= (int8_t)app->cached_suggestion_count) {
+        app->selected_suggestion = -1;
+        // Restore original word
+        replace_last_word_with_suggestion(app, app->original_word);
+    } else {
+        // Show the selected suggestion in buffer
+        replace_last_word_with_suggestion(app, app->cached_suggestions[app->selected_suggestion]);
+    }
+    
+    FURI_LOG_I(TAG, "Cycled to suggestion %d, buffer: '%s'", app->selected_suggestion, app->text_buffer);
+}
+
+// Helper function to accept currently selected suggestion
+static void t9_accept_suggestion(TypeAidApp* app) {
+    if(app->selected_suggestion >= 0 && app->selected_suggestion < (int8_t)app->cached_suggestion_count) {
+        // Suggestion is already in buffer, add space, and just reset selection state
+        size_t current_len = strlen(app->text_buffer);
+        if(current_len < TEXT_BUFFER_SIZE - 1) {
+            app->text_buffer[current_len] = ' ';
+            app->text_buffer[current_len + 1] = '\0';
+        }
+        
+        // Update suggestions for the newly accepted word
+        t9_update_suggestions(app);
+        
+        FURI_LOG_I(TAG, "Accepted suggestion, buffer: '%s'", app->text_buffer);
+    }
+}
+
 // Helper function to update suggestion cache when buffer changes
 static void t9_update_suggestions(TypeAidApp* app) {
     // Only update if buffer has changed
@@ -190,7 +294,11 @@ static void t9_update_suggestions(TypeAidApp* app) {
         return;  // Buffer unchanged, use cached suggestions
     }
     
-    // Buffer changed - update cache
+    // Buffer changed - reset selection state
+    app->selected_suggestion = -1;
+    app->original_word[0] = '\0';
+    
+    // Update cache
     strncpy(app->last_buffer_for_suggestions, app->text_buffer, TEXT_BUFFER_SIZE - 1);
     app->last_buffer_for_suggestions[TEXT_BUFFER_SIZE - 1] = '\0';
     
@@ -433,6 +541,10 @@ static TypeAidApp* type_aid_app_alloc() {
 	app->cached_suggestion_count = 0;
 	memset(app->last_buffer_for_suggestions, 0, sizeof(app->last_buffer_for_suggestions));
 	
+	// Initialize suggestion selection state
+	app->selected_suggestion = -1;
+	memset(app->original_word, 0, sizeof(app->original_word));
+	
 	t9plus_init(); // Initialize T9+ prediction system
 	
     FURI_LOG_I(TAG, "=== App allocation complete ===");
@@ -497,7 +609,12 @@ int32_t type_aid_main(void* p) {
                             gui_remove_view_port(app->gui, app->t9_view_port);
                             gui_add_view_port(app->gui, app->view_port, GuiLayerFullscreen);
                         } else if(event.key == InputKeyOk) {
-                            t9_add_character(app);
+                            // If a suggestion is selected, accept it; otherwise add character
+                            if(app->selected_suggestion >= 0) {
+                                t9_accept_suggestion(app);
+                            } else {
+                                t9_add_character(app);
+                            }
                             view_port_update(app->t9_view_port);
                         } else if(event.key == InputKeyUp) {
                             t9_move_cursor(-1, 0);
@@ -509,7 +626,13 @@ int32_t type_aid_main(void* p) {
                             t9_move_cursor(0, -1);
                             view_port_update(app->t9_view_port);
                         } else if(event.key == InputKeyRight) {
-                            t9_move_cursor(0, 1);
+                            // Short press: move cursor
+                            // Long press: cycle through suggestions
+                            if(event.type == InputTypeLong) {
+                                t9_cycle_suggestion(app);
+                            } else {
+                                t9_move_cursor(0, 1);
+                            }
                             view_port_update(app->t9_view_port);
                         }
                     }
