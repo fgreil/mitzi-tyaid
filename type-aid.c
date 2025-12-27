@@ -24,11 +24,134 @@ typedef struct {
     FuriMessageQueue* event_queue;
     TextInput* text_input;
     ViewDispatcher* view_dispatcher;
+    ViewPort* t9_view_port;
     
     char text_buffer[TEXT_BUFFER_SIZE];
     bool in_text_input;  // Track which screen we're on
 	bool keyboard_used;  // Track if keyboard has been opened at least once
 } TypeAidApp;
+
+// ============================================================================
+// T9-MINUS SCREEN - TYPES AND DATA
+// ============================================================================
+
+static const char* t9_lines[] = {
+    "qwertyuiop[]",
+    "asdfghjkl;'",
+    "zxcvbnm,./"
+};
+
+typedef struct {
+    uint8_t line;  // 0-2
+    uint8_t pos;   // position within line
+} T9Cursor;
+
+static T9Cursor t9_cursor = {0, 0};
+
+// ============================================================================
+// T9-MINUS SCREEN - DRAW CALLBACK
+// ============================================================================
+
+static void t9_draw_callback(Canvas* canvas, void* context) {
+    TypeAidApp* app = context;
+    
+    if(!app) {
+        return;
+    }
+    
+    canvas_clear(canvas);
+    
+    // Draw icon and title at the top
+    canvas_draw_icon(canvas, 1, 1, &I_icon_10x10);
+    canvas_set_font(canvas, FontPrimary);
+    canvas_draw_str_aligned(canvas, 12, 1, AlignLeft, AlignTop, "Type Aid v0.1");
+    
+    // Draw horizontal line at 1/3 height (64/3 ≈ 21)
+    const uint8_t divider_y = 21;
+    canvas_draw_line(canvas, 0, divider_y, 128, divider_y);
+    
+    // Display current text buffer above the line
+    canvas_set_font(canvas, FontSecondary);
+    if(strlen(app->text_buffer) > 0) {
+        canvas_draw_str_aligned(canvas, 2, 13, AlignLeft, AlignTop, app->text_buffer);
+    }
+    
+    // Draw the three lines of letters below the divider
+    const uint8_t start_y = divider_y + 8;
+    const uint8_t line_spacing = 12;
+    const uint8_t char_spacing = 10;
+    const uint8_t start_x = 2;
+    
+    for(uint8_t line = 0; line < 3; line++) {
+        const char* line_str = t9_lines[line];
+        size_t line_len = strlen(line_str);
+        
+        for(size_t i = 0; i < line_len; i++) {
+            uint8_t x = start_x + (i * char_spacing);
+            uint8_t y = start_y + (line * line_spacing);
+            
+            // Set bold font for cursor position
+            if(line == t9_cursor.line && i == t9_cursor.pos) {
+                canvas_set_font(canvas, FontPrimary);
+            } else {
+                canvas_set_font(canvas, FontSecondary);
+            }
+            
+            char single_char[2] = {line_str[i], '\0'};
+            canvas_draw_str(canvas, x, y, single_char);
+        }
+    }
+    
+    // Draw navigation hints at bottom
+    elements_button_center(canvas, "Add");
+    canvas_draw_icon(canvas, 1, 55, &I_back);
+    canvas_draw_str_aligned(canvas, 11, 63, AlignLeft, AlignBottom, "Exit");
+}
+
+// ============================================================================
+// T9-MINUS SCREEN - INPUT CALLBACK
+// ============================================================================
+
+static void t9_input_callback(InputEvent* input_event, void* context) {
+    TypeAidApp* app = context;
+    furi_message_queue_put(app->event_queue, input_event, FuriWaitForever);
+}
+
+// ============================================================================
+// T9-MINUS SCREEN - NAVIGATION
+// ============================================================================
+
+static void t9_move_cursor(int8_t line_delta, int8_t pos_delta) {
+    if(line_delta != 0) {
+        int8_t new_line = t9_cursor.line + line_delta;
+        if(new_line >= 0 && new_line < 3) {
+            t9_cursor.line = new_line;
+            // Clamp position to new line length
+            size_t max_pos = strlen(t9_lines[t9_cursor.line]) - 1;
+            if(t9_cursor.pos > max_pos) {
+                t9_cursor.pos = max_pos;
+            }
+        }
+    }
+    
+    if(pos_delta != 0) {
+        int8_t new_pos = t9_cursor.pos + pos_delta;
+        size_t max_pos = strlen(t9_lines[t9_cursor.line]) - 1;
+        if(new_pos >= 0 && new_pos <= (int8_t)max_pos) {
+            t9_cursor.pos = new_pos;
+        }
+    }
+}
+
+static void t9_add_character(TypeAidApp* app) {
+    size_t current_len = strlen(app->text_buffer);
+    if(current_len < TEXT_BUFFER_SIZE - 1) {
+        char ch = t9_lines[t9_cursor.line][t9_cursor.pos];
+        app->text_buffer[current_len] = ch;
+        app->text_buffer[current_len + 1] = '\0';
+        FURI_LOG_I(TAG, "Added char '%c', buffer now: '%s'", ch, app->text_buffer);
+    }
+}
 
 // ============================================================================
 // SPLASH SCREEN - DRAW CALLBACK
@@ -166,6 +289,11 @@ static TypeAidApp* type_aid_app_alloc() {
     view_port_draw_callback_set(app->view_port, splash_draw_callback, app);
     view_port_input_callback_set(app->view_port, splash_input_callback, app);
     
+    FURI_LOG_D(TAG, "Creating viewport for T9");
+    app->t9_view_port = view_port_alloc();
+    view_port_draw_callback_set(app->t9_view_port, t9_draw_callback, app);
+    view_port_input_callback_set(app->t9_view_port, t9_input_callback, app);
+    
     FURI_LOG_D(TAG, "Creating view dispatcher");
     app->view_dispatcher = view_dispatcher_alloc();
     
@@ -203,6 +331,7 @@ static void type_aid_app_free(TypeAidApp* app) {
     
     gui_remove_view_port(app->gui, app->view_port);
     view_port_free(app->view_port);
+    view_port_free(app->t9_view_port);
     
     view_dispatcher_remove_view(app->view_dispatcher, 1);
     text_input_free(app->text_input);
@@ -226,23 +355,58 @@ int32_t type_aid_main(void* p) {
     TypeAidApp* app = type_aid_app_alloc();
     InputEvent event;
     
+    bool in_t9_mode = false;
+    
     FURI_LOG_I(TAG, "Entering main event loop"); // --------------------------
     while(1) {
         if(app->in_text_input) {
             // We're waiting for text input to finish
             furi_delay_ms(100); 
         } else {
-            // Normal splash screen event handling
+            // Handle events based on current mode
             if(furi_message_queue_get(app->event_queue, &event, 100) == FuriStatusOk) {
-                FURI_LOG_D(TAG, "Event: type=%d key=%d", event.type, event.key);
                 
-                if(event.type == InputTypeShort || event.type == InputTypeLong) {
+                if(in_t9_mode) {
+                    // T9 mode event handling
+                    if(event.type == InputTypeShort || event.type == InputTypeLong) {
+                        if(event.key == InputKeyBack) {
+                            FURI_LOG_I(TAG, "Back pressed in T9, returning to splash");
+                            in_t9_mode = false;
+                            t9_cursor.line = 0;
+                            t9_cursor.pos = 0;
+                            gui_remove_view_port(app->gui, app->t9_view_port);
+                            gui_add_view_port(app->gui, app->view_port, GuiLayerFullscreen);
+                        } else if(event.key == InputKeyOk) {
+                            t9_add_character(app);
+                            view_port_update(app->t9_view_port);
+                        } else if(event.key == InputKeyUp) {
+                            t9_move_cursor(-1, 0);
+                            view_port_update(app->t9_view_port);
+                        } else if(event.key == InputKeyDown) {
+                            t9_move_cursor(1, 0);
+                            view_port_update(app->t9_view_port);
+                        } else if(event.key == InputKeyLeft) {
+                            t9_move_cursor(0, -1);
+                            view_port_update(app->t9_view_port);
+                        } else if(event.key == InputKeyRight) {
+                            t9_move_cursor(0, 1);
+                            view_port_update(app->t9_view_port);
+                        }
+                    }
+                } else if(event.type == InputTypeShort || event.type == InputTypeLong) {
+                    // Splash screen event handling
                     if(event.key == InputKeyBack) {
                         FURI_LOG_I(TAG, "Back pressed, exiting");
                         break;
                     }
                     else if(event.key == InputKeyOk) {
-                        FURI_LOG_I(TAG, "OK pressed, showing text input");
+                        FURI_LOG_I(TAG, "OK pressed, showing T9 input");
+                        in_t9_mode = true;
+                        gui_remove_view_port(app->gui, app->view_port);
+                        gui_add_view_port(app->gui, app->t9_view_port, GuiLayerFullscreen);
+                    }
+                    else if(event.key == InputKeyDown || event.key == InputKeyRight) {
+                        FURI_LOG_I(TAG, "Down/Right pressed, showing text input");
                         app->keyboard_used = true; // Flag that keyboard has been used at least once
                         gui_remove_view_port(app->gui, app->view_port); // Remove splash screen
                         
@@ -260,7 +424,9 @@ int32_t type_aid_main(void* p) {
                 }
             }
             
-            view_port_update(app->view_port);
+            if(!in_t9_mode) {
+                view_port_update(app->view_port);
+            }
         }
     }
     FURI_LOG_I(TAG, "Cleaning up");
