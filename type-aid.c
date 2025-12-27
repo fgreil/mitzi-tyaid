@@ -11,8 +11,22 @@
 // ============================================================================
 // CONSTANTS AND CONFIGURATION
 // ============================================================================
-
 #define TEXT_BUFFER_SIZE 256
+#define T9_LINE1_OFFSET 18
+#define T9_LINE2_OFFSET 22
+#define T9_LINE4_OFFSET 18
+static const char* t9_lines[] = {
+    "qwertzuiop[]",
+    "asdfghjkl'",
+    "yxcvbnm,;.:-",
+	""
+};
+static const char* t9_lines_upper[] = {
+    "QWERTZUIOP[]",
+    "ASDFGHJKL'",
+    "YXCVBNM,;.:-",
+	""
+};
 
 // ============================================================================
 // TYPES AND STRUCTURES
@@ -34,19 +48,13 @@ typedef struct {
 // ============================================================================
 // T9-MINUS SCREEN - TYPES AND DATA
 // ============================================================================
-
-static const char* t9_lines[] = {
-    "qwertyuiop[]",
-    "asdfghjkl;'",
-    "zxcvbnm,./"
-};
-
 typedef struct {
-    uint8_t line;  // 0-2
-    uint8_t pos;   // position within line
+    uint8_t line;  // 0-3
+    int8_t pos;   // position within line (can be -1 for shft button)
 } T9Cursor;
 
 static T9Cursor t9_cursor = {0, 0};
+static bool shift_locked = false;
 
 // ============================================================================
 // T9-MINUS SCREEN - DRAW CALLBACK
@@ -62,26 +70,59 @@ static void t9_draw_callback(Canvas* canvas, void* context) {
     if(strlen(app->text_buffer) > 0) {
         canvas_draw_str_aligned(canvas, 0, 1, AlignLeft, AlignTop, app->text_buffer);
     }   
-    // Draw horizontal line 
-    const uint8_t divider_y = 18;
+    // Draw horizontal divider line 
+    const uint8_t divider_y = 12;
     canvas_draw_line(canvas, 0, divider_y, 128, divider_y);
     
     // Draw the three lines of letters below the divider
-    const uint8_t start_y = divider_y + 8;
-    const uint8_t line_spacing = 8;
-    const uint8_t char_spacing = 8;
-    const uint8_t start_x = 2;
-    
-    for(uint8_t line = 0; line < 3; line++) {
-        const char* line_str = t9_lines[line];
+    const uint8_t start_y = divider_y + 10;
+    const uint8_t line_spacing = 9;
+    const uint8_t char_spacing = 9;
+    for(uint8_t line = 0; line < 4; line++) {
+        const char* line_str = shift_locked ? t9_lines_upper[line] : t9_lines[line];
         size_t line_len = strlen(line_str);
-        
+		uint8_t start_x = 2;
+        if(line == 0) start_x += T9_LINE1_OFFSET;
+        if(line == 1) start_x += T9_LINE2_OFFSET;        
+        // Draw "shft" button for line 2
+        if(line == 2) {
+            uint8_t shft_x = start_x;
+            uint8_t shft_y = start_y + (line * line_spacing);
+            
+            bool is_shft_cursor = (t9_cursor.line == 2 && t9_cursor.pos == -1);
+            if(is_shft_cursor || shift_locked) {
+                canvas_set_font(canvas, FontPrimary);
+            } else {
+                canvas_set_font(canvas, FontSecondary);
+            }
+            canvas_draw_str(canvas, shft_x, shft_y, "shft");
+            
+            // Adjust start_x for the rest of line 2
+            start_x += 28;  // Space for "shft" + gap
+        }
+		// Draw "[space]" button for line 3
+        if(line == 3) {
+            uint8_t space_x = T9_LINE4_OFFSET;
+            uint8_t space_y = start_y + (line * line_spacing);
+            
+            bool is_space_cursor = (t9_cursor.line == 3 && t9_cursor.pos == -1);
+            if(is_space_cursor) {
+                canvas_set_font(canvas, FontPrimary);
+            } else {
+                canvas_set_font(canvas, FontSecondary);
+            }
+            canvas_draw_str(canvas, space_x, space_y, "[space]");
+			canvas_set_font(canvas, FontSecondary);
+        }
+		
         for(size_t i = 0; i < line_len; i++) {
             uint8_t x = start_x + (i * char_spacing);
             uint8_t y = start_y + (line * line_spacing);
             
             // Set bold font for cursor position
-            if(line == t9_cursor.line && i == t9_cursor.pos) {
+            bool is_cursor = (line == t9_cursor.line && (int8_t)i == t9_cursor.pos);
+            
+            if(is_cursor) {
                 canvas_set_font(canvas, FontPrimary);
             } else {
                 canvas_set_font(canvas, FontSecondary);
@@ -114,11 +155,14 @@ static void t9_input_callback(InputEvent* input_event, void* context) {
 static void t9_move_cursor(int8_t line_delta, int8_t pos_delta) {
     if(line_delta != 0) {
         int8_t new_line = t9_cursor.line + line_delta;
-        if(new_line >= 0 && new_line < 3) {
+        if(new_line >= 0 && new_line < 4) {
             t9_cursor.line = new_line;
             // Clamp position to new line length
-            size_t max_pos = strlen(t9_lines[t9_cursor.line]) - 1;
-            if(t9_cursor.pos > max_pos) {
+            int8_t min_pos = (t9_cursor.line == 2 || t9_cursor.line == 3) ? -1 : 0;  // Line 2 and 3 have special buttons at -1
+            int8_t max_pos = strlen(t9_lines[t9_cursor.line]) - 1;
+            if(t9_cursor.pos < min_pos) {
+                t9_cursor.pos = min_pos;
+            } else if(t9_cursor.pos > max_pos) {
                 t9_cursor.pos = max_pos;
             }
         }
@@ -126,17 +170,37 @@ static void t9_move_cursor(int8_t line_delta, int8_t pos_delta) {
     
     if(pos_delta != 0) {
         int8_t new_pos = t9_cursor.pos + pos_delta;
-        size_t max_pos = strlen(t9_lines[t9_cursor.line]) - 1;
-        if(new_pos >= 0 && new_pos <= (int8_t)max_pos) {
+        int8_t min_pos = (t9_cursor.line == 2 || t9_cursor.line == 3) ? -1 : 0;
+        int8_t max_pos = strlen(t9_lines[t9_cursor.line]) - 1;
+        if(new_pos >= min_pos && new_pos <= max_pos) {
             t9_cursor.pos = new_pos;
         }
     }
 }
 
 static void t9_add_character(TypeAidApp* app) {
+    // Check if we're on the "shft" button (line 2, pos -1)
+    if(t9_cursor.line == 2 && t9_cursor.pos == -1) {
+        shift_locked = !shift_locked;
+        FURI_LOG_I(TAG, "Shift lock toggled: %s", shift_locked ? "ON" : "OFF");
+        return;
+    }
+	// Check if we're on the "[space]" button (line 3, pos -1)
+    if(t9_cursor.line == 3 && t9_cursor.pos == -1) {
+        size_t current_len = strlen(app->text_buffer);
+        if(current_len < TEXT_BUFFER_SIZE - 1) {
+            app->text_buffer[current_len] = ' ';
+            app->text_buffer[current_len + 1] = '\0';
+            FURI_LOG_I(TAG, "Added space, buffer now: '%s'", app->text_buffer);
+        }
+        return;
+    }
+	
+    
     size_t current_len = strlen(app->text_buffer);
     if(current_len < TEXT_BUFFER_SIZE - 1) {
-        char ch = t9_lines[t9_cursor.line][t9_cursor.pos];
+		const char* line_str = shift_locked ? t9_lines_upper[t9_cursor.line] : t9_lines[t9_cursor.line];
+        char ch = line_str[t9_cursor.pos];
         app->text_buffer[current_len] = ch;
         app->text_buffer[current_len + 1] = '\0';
         FURI_LOG_I(TAG, "Added char '%c', buffer now: '%s'", ch, app->text_buffer);
@@ -146,7 +210,6 @@ static void t9_add_character(TypeAidApp* app) {
 // ============================================================================
 // SPLASH SCREEN - DRAW CALLBACK
 // ============================================================================
-
 static void splash_draw_callback(Canvas* canvas, void* context) {
     FURI_LOG_D(TAG, "splash_draw_callback: enter");
     TypeAidApp* app = context;
@@ -160,10 +223,7 @@ static void splash_draw_callback(Canvas* canvas, void* context) {
     
     // Draw splash icon only on first view (before keyboard is used)
     if(!app->keyboard_used){
-        canvas_draw_icon(canvas, 50, 1, &I_splash);
-		canvas_set_font_direction(canvas, CanvasDirectionBottomToTop); // Set text rotation to 90 degrees 
-		canvas_draw_str(canvas, 128, 48, "f418.eu");		
-		canvas_set_font_direction(canvas, CanvasDirectionLeftToRight); // Reset to normal text direction
+        canvas_draw_icon(canvas, 46, 1, &I_splash);
     }
     // Draw icon and title at the top
     canvas_draw_icon(canvas, 1, 1, &I_icon_10x10);
@@ -176,9 +236,9 @@ static void splash_draw_callback(Canvas* canvas, void* context) {
     
     // Display entered text inside the box (truncated, no scrolling)
     if(strlen(app->text_buffer) > 0) {
-		const uint8_t box_x = 0;
+		const uint8_t box_x = -1;
 		const uint8_t box_y = 16;
-		const uint8_t box_width = 128;
+		const uint8_t box_width = 1;
 		const uint8_t box_height = 35;
 		// Draw a box for the text display area
 		canvas_draw_frame(canvas, box_x, box_y, box_width, box_height);
@@ -365,6 +425,7 @@ int32_t type_aid_main(void* p) {
                             in_t9_mode = false;
                             t9_cursor.line = 0;
                             t9_cursor.pos = 0;
+							shift_locked = false;  // Reset shift lock
                             gui_remove_view_port(app->gui, app->t9_view_port);
                             gui_add_view_port(app->gui, app->view_port, GuiLayerFullscreen);
                         } else if(event.key == InputKeyOk) {
