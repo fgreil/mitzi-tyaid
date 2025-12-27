@@ -4,6 +4,7 @@
 #include <gui/modules/text_input.h>      // Standard text input keyboard module
 #include <gui/view_dispatcher.h>         // View management and navigation system
 #include <mitzi_tyaid_icons.h>           // Auto-generated header for icons in images/ folder
+#include "t9plus.h"					     // a T9 inspired word prediction system
 
 // Debug tag for logging
 #define TAG "TypeAid"
@@ -12,9 +13,10 @@
 // CONSTANTS AND CONFIGURATION
 // ============================================================================
 #define TEXT_BUFFER_SIZE 256
-#define T9_LINE1_OFFSET 18
-#define T9_LINE2_OFFSET 22
-#define T9_LINE4_OFFSET 18
+#define T9_LINE1_OFFSET 16
+#define T9_LINE2_OFFSET 20
+#define T9_LINE3_OFFSET 20
+#define T9_LINE4_OFFSET 30 
 static const char* t9_lines[] = {
     "qwertzuiop[]",
     "asdfghjkl'",
@@ -70,11 +72,31 @@ static void t9_draw_callback(Canvas* canvas, void* context) {
     if(strlen(app->text_buffer) > 0) {
         canvas_draw_str_aligned(canvas, 0, 1, AlignLeft, AlignTop, app->text_buffer);
     }   
-    // Draw horizontal divider line 
-    const uint8_t divider_y = 12;
-    canvas_draw_line(canvas, 0, divider_y, 128, divider_y);
+	// Draw horizontal lines
+	const uint8_t divider_positions[] = {12, 24};
+	uint8_t divider_y = 0;
+	const size_t num_dividers = sizeof(divider_positions) / sizeof(divider_positions[0]);
+	for(size_t i = 0; i < num_dividers; i++) {
+		canvas_draw_line(canvas, 0, divider_positions[i], 128, divider_positions[i]);
+		divider_y = divider_positions[i];
+	}
+    // Draw word suggestions between buffer and divider
+    char suggestions[T9PLUS_MAX_SUGGESTIONS][T9PLUS_MAX_WORD_LENGTH];
+    uint8_t num_suggestions = t9plus_get_suggestions(app->text_buffer, suggestions, T9PLUS_MAX_SUGGESTIONS);
     
-    // Draw the three lines of letters below the divider
+    if(num_suggestions > 0) {
+        canvas_set_font(canvas, FontSecondary);
+        const uint8_t sugg_y = 13;  // Position for suggestions (between buffer and divider)
+        char suggestion_line[128];
+        snprintf(suggestion_line, sizeof(suggestion_line), "%s  %s  %s",
+            num_suggestions > 0 ? suggestions[0] : "",
+            num_suggestions > 1 ? suggestions[1] : "",
+            num_suggestions > 2 ? suggestions[2] : "");
+        canvas_draw_str_aligned(canvas, 2, sugg_y, AlignLeft, AlignTop, suggestion_line);
+    }
+	
+	
+	// Draw the three lines of letters below the divider
     const uint8_t start_y = divider_y + 10;
     const uint8_t line_spacing = 9;
     const uint8_t char_spacing = 9;
@@ -98,7 +120,7 @@ static void t9_draw_callback(Canvas* canvas, void* context) {
             canvas_draw_str(canvas, shft_x, shft_y, "shft");
             
             // Adjust start_x for the rest of line 2
-            start_x += 28;  // Space for "shft" + gap
+            start_x += T9_LINE3_OFFSET;  // Space for "shft" + gap
         }
 		// Draw "[space]" button for line 3
         if(line == 3) {
@@ -111,7 +133,7 @@ static void t9_draw_callback(Canvas* canvas, void* context) {
             } else {
                 canvas_set_font(canvas, FontSecondary);
             }
-            canvas_draw_str(canvas, space_x, space_y, "[space]");
+            canvas_draw_str(canvas, space_x, space_y, "[ space ]");
 			canvas_set_font(canvas, FontSecondary);
         }
 		
@@ -134,7 +156,6 @@ static void t9_draw_callback(Canvas* canvas, void* context) {
     }
     
     // Draw navigation hints at bottom
-    elements_button_center(canvas, "Add");
     canvas_draw_icon(canvas, 1, 55, &I_back);
     canvas_draw_str_aligned(canvas, 11, 63, AlignLeft, AlignBottom, "Exit");
 }
@@ -369,6 +390,9 @@ static TypeAidApp* type_aid_app_alloc() {
     
     app->in_text_input = false;
     app->keyboard_used = false;  // Initially, keyboard hasn't been used
+	
+	t9plus_init(); // Initialize T9+ prediction system
+	
     FURI_LOG_I(TAG, "=== App allocation complete ===");
     return app;
 }
@@ -392,6 +416,8 @@ static void type_aid_app_free(TypeAidApp* app) {
     furi_record_close(RECORD_GUI);
     free(app);
     
+    t9plus_deinit(); // Clean up T9+ prediction system
+	
     FURI_LOG_I(TAG, "=== App cleanup complete ===");
 }
 
