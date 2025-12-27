@@ -23,6 +23,8 @@ static struct {
     WordTier tier3b; // Fillers
     WordTier tier4;  // Formal discourse
     bool initialized;
+    bool has_load_errors;  // Track if any files failed to load
+    char error_message[64];  // Store error message for display
 } t9plus_state = {0};
 
 // Helper: Allocate word tier
@@ -168,14 +170,66 @@ bool t9plus_init(void) {
     
     // Load tier files
     bool all_loaded = true;
-    all_loaded &= load_tier_from_file("/ext/apps_data/type_aid/data/tier1_function_words.txt", &t9plus_state.tier1);
-    all_loaded &= load_tier_from_file("/ext/apps_data/type_aid/data/tier2_lemma_list.txt", &t9plus_state.tier2);
-    all_loaded &= load_tier_from_file("/ext/apps_data/type_aid/data/tier3a_chat.txt", &t9plus_state.tier3a);
-    all_loaded &= load_tier_from_file("/ext/apps_data/type_aid/data/tier3b_fillers.txt", &t9plus_state.tier3b);
-    all_loaded &= load_tier_from_file("/ext/apps_data/type_aid/data/tier4_formal_discourse.txt", &t9plus_state.tier4);
+    int failed_count = 0;
     
+    if(!load_tier_from_file("/ext/apps_data/type_aid/data/tier1_function_words.txt", &t9plus_state.tier1)) {
+        all_loaded = false;
+        failed_count++;
+    }
+    if(!load_tier_from_file("/ext/apps_data/type_aid/data/tier2_lemma_list.txt", &t9plus_state.tier2)) {
+        all_loaded = false;
+        failed_count++;
+    }
+    if(!load_tier_from_file("/ext/apps_data/type_aid/data/tier3a_chat.txt", &t9plus_state.tier3a)) {
+        all_loaded = false;
+        failed_count++;
+    }
+    if(!load_tier_from_file("/ext/apps_data/type_aid/data/tier3b_fillers.txt", &t9plus_state.tier3b)) {
+        all_loaded = false;
+        failed_count++;
+    }
+    if(!load_tier_from_file("/ext/apps_data/type_aid/data/tier4_formal_discourse.txt", &t9plus_state.tier4)) {
+        all_loaded = false;
+        failed_count++;
+    }
+    
+    // TEMPORARY: Add hardcoded test words if files didn't load
+    if(t9plus_state.tier1.count == 0) {
+        FURI_LOG_W(TAG, "Tier1 empty, adding hardcoded test words");
+        tier_add_word(&t9plus_state.tier1, "the");
+        tier_add_word(&t9plus_state.tier1, "that");
+        tier_add_word(&t9plus_state.tier1, "this");
+        tier_add_word(&t9plus_state.tier1, "to");
+        tier_add_word(&t9plus_state.tier1, "it");
+        tier_add_word(&t9plus_state.tier1, "is");
+        tier_add_word(&t9plus_state.tier1, "in");
+        tier_add_word(&t9plus_state.tier1, "and");
+        tier_add_word(&t9plus_state.tier1, "have");
+        tier_add_word(&t9plus_state.tier1, "we");
+        tier_add_word(&t9plus_state.tier1, "were");
+        tier_add_word(&t9plus_state.tier1, "will");
+        tier_add_word(&t9plus_state.tier1, "would");
+        tier_add_word(&t9plus_state.tier1, "hello");
+        tier_add_word(&t9plus_state.tier1, "help");
+        tier_add_word(&t9plus_state.tier1, "world");
+        tier_add_word(&t9plus_state.tier1, "work");
+        FURI_LOG_I(TAG, "Added %zu hardcoded words to tier1", t9plus_state.tier1.count);
+    }
+    
+    // Set error message if files failed to load
     if(!all_loaded) {
-        FURI_LOG_W(TAG, "Some tier files failed to load");
+        t9plus_state.has_load_errors = true;
+        if(failed_count == 5) {
+            snprintf(t9plus_state.error_message, sizeof(t9plus_state.error_message), 
+                "ERROR: No data files found!");
+        } else {
+            snprintf(t9plus_state.error_message, sizeof(t9plus_state.error_message), 
+                "WARNING: %d data file(s) missing", failed_count);
+        }
+        FURI_LOG_W(TAG, "%s", t9plus_state.error_message);
+    } else {
+        t9plus_state.has_load_errors = false;
+        t9plus_state.error_message[0] = '\0';
     }
     
     FURI_LOG_I(TAG, "Loaded words: tier1=%zu, tier2=%zu, tier3a=%zu, tier3b=%zu, tier4=%zu",
@@ -205,6 +259,18 @@ void t9plus_deinit(void) {
 
 bool t9plus_is_word_char(char c) {
     return isalnum((unsigned char)c) || c == '\'';
+}
+
+const char* t9plus_get_error_message(void) {
+    if(!t9plus_state.initialized) {
+        return "T9+ not initialized";
+    }
+    
+    if(t9plus_state.has_load_errors) {
+        return t9plus_state.error_message;
+    }
+    
+    return NULL;  // No error
 }
 
 // Helper: Case-insensitive prefix match

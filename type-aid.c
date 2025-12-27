@@ -45,6 +45,11 @@ typedef struct {
     char text_buffer[TEXT_BUFFER_SIZE];
     bool in_text_input;  // Track which screen we're on
 	bool keyboard_used;  // Track if keyboard has been opened at least once
+	
+	// Suggestion cache
+	char cached_suggestions[T9PLUS_MAX_SUGGESTIONS][T9PLUS_MAX_WORD_LENGTH];
+	uint8_t cached_suggestion_count;
+	char last_buffer_for_suggestions[TEXT_BUFFER_SIZE];  // Track when to update suggestions
 } TypeAidApp;
 
 // ============================================================================
@@ -80,29 +85,28 @@ static void t9_draw_callback(Canvas* canvas, void* context) {
 		canvas_draw_line(canvas, 0, divider_positions[i], 128, divider_positions[i]);
 		divider_y = divider_positions[i];
 	}
-    // Draw word suggestions between buffer and divider
-    if(strlen(app->text_buffer) > 0) {
-        char suggestions[T9PLUS_MAX_SUGGESTIONS][T9PLUS_MAX_WORD_LENGTH];
-        memset(suggestions, 0, sizeof(suggestions));
-        
-        uint8_t num_suggestions = t9plus_get_suggestions(app->text_buffer, suggestions, T9PLUS_MAX_SUGGESTIONS);
-		
-        if(num_suggestions > 0) {
-            canvas_set_font(canvas, FontSecondary);
-			const uint8_t sugg_y = divider_y;
-            
-            // Build suggestion line with proper spacing
-            FuriString* sugg_str = furi_string_alloc();
-            for(uint8_t i = 0; i < num_suggestions; i++) {
-                if(i > 0) furi_string_cat(sugg_str, "  ");
-                furi_string_cat(sugg_str, suggestions[i]);
-            }
-            canvas_draw_str(canvas, 2, sugg_y, furi_string_get_cstr(sugg_str));
-            furi_string_free(sugg_str);
+	
+    // Draw word suggestions or error message between buffer and divider
+    canvas_set_font(canvas, FontSecondary);
+    const uint8_t sugg_y = divider_y - 3;
+    
+    // Check for error message first
+    const char* error_msg = t9plus_get_error_message();
+    if(error_msg != NULL) {
+        // Display error message
+        canvas_draw_str(canvas, 2, sugg_y, error_msg);
+    } else if(strlen(app->text_buffer) > 0 && app->cached_suggestion_count > 0) {
+        // Display suggestions (using cached suggestions)
+        FuriString* sugg_str = furi_string_alloc();
+        for(uint8_t i = 0; i < app->cached_suggestion_count; i++) {
+            if(i > 0) furi_string_cat(sugg_str, "  ");
+            furi_string_cat(sugg_str, app->cached_suggestions[i]);
         }
+        canvas_draw_str(canvas, 2, sugg_y, furi_string_get_cstr(sugg_str));
+        furi_string_free(sugg_str);
     }
     
-	// Draw the three lines of letters below the last divider
+	// Draw the three lines of letters below the divider
     const uint8_t start_y = divider_y + 10;
     const uint8_t line_spacing = 9;
     const uint8_t char_spacing = 9;
@@ -179,6 +183,31 @@ static void t9_input_callback(InputEvent* input_event, void* context) {
 // T9-MINUS SCREEN - NAVIGATION
 // ============================================================================
 
+// Helper function to update suggestion cache when buffer changes
+static void t9_update_suggestions(TypeAidApp* app) {
+    // Only update if buffer has changed
+    if(strcmp(app->text_buffer, app->last_buffer_for_suggestions) == 0) {
+        return;  // Buffer unchanged, use cached suggestions
+    }
+    
+    // Buffer changed - update cache
+    strncpy(app->last_buffer_for_suggestions, app->text_buffer, TEXT_BUFFER_SIZE - 1);
+    app->last_buffer_for_suggestions[TEXT_BUFFER_SIZE - 1] = '\0';
+    
+    // Clear old suggestions
+    memset(app->cached_suggestions, 0, sizeof(app->cached_suggestions));
+    app->cached_suggestion_count = 0;
+    
+    // Get new suggestions
+    if(strlen(app->text_buffer) > 0) {
+        app->cached_suggestion_count = t9plus_get_suggestions(
+            app->text_buffer, 
+            app->cached_suggestions, 
+            T9PLUS_MAX_SUGGESTIONS
+        );
+    }
+}
+
 static void t9_move_cursor(int8_t line_delta, int8_t pos_delta) {
     if(line_delta != 0) {
         int8_t new_line = t9_cursor.line + line_delta;
@@ -219,6 +248,7 @@ static void t9_add_character(TypeAidApp* app) {
             app->text_buffer[current_len] = ' ';
             app->text_buffer[current_len + 1] = '\0';
             FURI_LOG_I(TAG, "Added space, buffer now: '%s'", app->text_buffer);
+            t9_update_suggestions(app);  // Update suggestions after adding space
         }
         return;
     }
@@ -231,6 +261,7 @@ static void t9_add_character(TypeAidApp* app) {
         app->text_buffer[current_len] = ch;
         app->text_buffer[current_len + 1] = '\0';
         FURI_LOG_I(TAG, "Added char '%c', buffer now: '%s'", ch, app->text_buffer);
+        t9_update_suggestions(app);  // Update suggestions after adding character
     }
 }
 
@@ -396,6 +427,11 @@ static TypeAidApp* type_aid_app_alloc() {
     
     app->in_text_input = false;
     app->keyboard_used = false;  // Initially, keyboard hasn't been used
+	
+	// Initialize suggestion cache
+	memset(app->cached_suggestions, 0, sizeof(app->cached_suggestions));
+	app->cached_suggestion_count = 0;
+	memset(app->last_buffer_for_suggestions, 0, sizeof(app->last_buffer_for_suggestions));
 	
 	t9plus_init(); // Initialize T9+ prediction system
 	

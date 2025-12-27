@@ -1,4 +1,5 @@
 #pragma once
+
 #include <furi.h>
 
 // Maximum number of suggestions to provide
@@ -43,3 +44,10 @@ uint8_t t9plus_get_suggestions(
  * @return true if character is alphanumeric or apostrophe
  */
 bool t9plus_is_word_char(char c);
+
+/**
+ * @brief Get error message if files failed to load
+ * 
+ * @return Pointer to error message string, or NULL if no errors
+ */
+const char* t9plus_get_error_message(void);
