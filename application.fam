@@ -11,7 +11,7 @@ App(
     # Application type - EXTERNAL means it's a .fap file loaded from SD card
     apptype=FlipperAppType.EXTERNAL,
     
-    # The C function that starts the app, i.a.w. the main C file must contain: int32_t astro_main(void* p) { ... }
+    # The C function that starts the app, i.a.w. the main C file must contain: int32_t type_aid_main(void* p) { ... }
     entry_point="type_aid_main",
 
     # Preprocessor definitions added during compilation
