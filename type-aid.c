@@ -81,22 +81,29 @@ static void t9_draw_callback(Canvas* canvas, void* context) {
 		divider_y = divider_positions[i];
 	}
     // Draw word suggestions between buffer and divider
-    char suggestions[T9PLUS_MAX_SUGGESTIONS][T9PLUS_MAX_WORD_LENGTH];
-    uint8_t num_suggestions = t9plus_get_suggestions(app->text_buffer, suggestions, T9PLUS_MAX_SUGGESTIONS);
-    
-    if(num_suggestions > 0) {
-        canvas_set_font(canvas, FontSecondary);
-        const uint8_t sugg_y = 13;  // Position for suggestions (between buffer and divider)
-        char suggestion_line[128];
-        snprintf(suggestion_line, sizeof(suggestion_line), "%s  %s  %s",
-            num_suggestions > 0 ? suggestions[0] : "",
-            num_suggestions > 1 ? suggestions[1] : "",
-            num_suggestions > 2 ? suggestions[2] : "");
-        canvas_draw_str_aligned(canvas, 2, sugg_y, AlignLeft, AlignTop, suggestion_line);
+    if(strlen(app->text_buffer) > 0) {
+        char suggestions[T9PLUS_MAX_SUGGESTIONS][T9PLUS_MAX_WORD_LENGTH];
+        memset(suggestions, 0, sizeof(suggestions));
+        
+        uint8_t num_suggestions = t9plus_get_suggestions(app->text_buffer, suggestions, T9PLUS_MAX_SUGGESTIONS);
+        FURI_LOG_I(TAG, "Suggestions: %i", num_suggestions);
+		
+        if(num_suggestions > 0) {
+            canvas_set_font(canvas, FontSecondary);
+			const uint8_t sugg_y = divider_y - 9;
+            
+            // Build suggestion line with proper spacing
+            FuriString* sugg_str = furi_string_alloc();
+            for(uint8_t i = 0; i < num_suggestions; i++) {
+                if(i > 0) furi_string_cat(sugg_str, "  ");
+                furi_string_cat(sugg_str, suggestions[i]);
+            }
+            canvas_draw_str(canvas, 2, sugg_y, furi_string_get_cstr(sugg_str));
+            furi_string_free(sugg_str);
+        }
     }
-	
-	
-	// Draw the three lines of letters below the divider
+    
+	// Draw the three lines of letters below the last divider
     const uint8_t start_y = divider_y + 10;
     const uint8_t line_spacing = 9;
     const uint8_t char_spacing = 9;

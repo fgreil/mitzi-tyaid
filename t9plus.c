@@ -63,8 +63,11 @@ static bool load_tier_from_file(const char* path, WordTier* tier) {
     Storage* storage = furi_record_open(RECORD_STORAGE);
     File* file = storage_file_alloc(storage);
     
+    FURI_LOG_I(TAG, "Loading tier from: %s", path);
+    
     bool success = false;
     if(storage_file_open(file, path, FSAM_READ, FSOM_OPEN_EXISTING)) {
+        FURI_LOG_I(TAG, "File opened successfully: %s", path);
         char buffer[MAX_WORD_LEN + 2]; // +2 for newline and null terminator
         size_t bytes_read;
         size_t pos = 0;
@@ -111,7 +114,10 @@ static bool load_tier_from_file(const char* path, WordTier* tier) {
         }
         
         success = true;
+        FURI_LOG_I(TAG, "Loaded %zu words from %s", tier->count, path);
         storage_file_close(file);
+    } else {
+        FURI_LOG_E(TAG, "Failed to open file: %s", path);
     }
     
     storage_file_free(file);
@@ -222,12 +228,17 @@ static void search_tier(
     uint8_t* found_count,
     uint8_t max_suggestions
 ) {
+    size_t matches_in_tier = 0;
     for(size_t i = 0; i < tier->count && *found_count < max_suggestions; i++) {
         if(starts_with_ci(tier->words[i], prefix)) {
             strncpy(suggestions[*found_count], tier->words[i], T9PLUS_MAX_WORD_LENGTH - 1);
             suggestions[*found_count][T9PLUS_MAX_WORD_LENGTH - 1] = '\0';
             (*found_count)++;
+            matches_in_tier++;
         }
+    }
+    if(matches_in_tier > 0) {
+        FURI_LOG_D(TAG, "Found %zu matches in tier", matches_in_tier);
     }
 }
 
@@ -242,6 +253,7 @@ uint8_t t9plus_get_suggestions(
     }
     
     if(!input || strlen(input) == 0) {
+        FURI_LOG_D(TAG, "Empty input");
         return 0;
     }
     
@@ -249,18 +261,50 @@ uint8_t t9plus_get_suggestions(
         max_suggestions = T9PLUS_MAX_SUGGESTIONS;
     }
     
-    // Extract the last word from input
-    const char* last_word = input;
-    for(const char* p = input; *p; p++) {
-        if(*p == ' ' || *p == '\n') {
-            last_word = p + 1;
+    // Extract the last word from input - find start of last word
+    const char* last_word_start = input;
+    size_t input_len = strlen(input);
+    
+    // Scan backwards from end to find last word boundary
+    if(input_len > 0) {
+        // Start from end of string
+        const char* p = input + input_len - 1;
+        
+        // Skip trailing whitespace
+        while(p >= input && (*p == ' ' || *p == '\n' || *p == '\r')) {
+            p--;
+        }
+        
+        // Now find the start of this word
+        const char* word_end = p + 1;
+        while(p >= input && *p != ' ' && *p != '\n' && *p != '\r') {
+            p--;
+        }
+        last_word_start = p + 1;
+        
+        // Check if we have a valid word
+        if(last_word_start >= word_end) {
+            FURI_LOG_D(TAG, "No word found in input");
+            return 0;
         }
     }
     
-    // Skip if last word is empty or just whitespace
-    if(strlen(last_word) == 0) {
+    // Create a temporary buffer for the last word
+    char last_word[MAX_WORD_LEN];
+    size_t word_len = 0;
+    const char* p = last_word_start;
+    while(*p && *p != ' ' && *p != '\n' && *p != '\r' && word_len < MAX_WORD_LEN - 1) {
+        last_word[word_len++] = *p++;
+    }
+    last_word[word_len] = '\0';
+    
+    // Skip if last word is empty
+    if(word_len == 0) {
+        FURI_LOG_D(TAG, "Empty word");
         return 0;
     }
+    
+    FURI_LOG_D(TAG, "Searching for prefix: '%s'", last_word);
     
     uint8_t found = 0;
     
@@ -278,6 +322,8 @@ uint8_t t9plus_get_suggestions(
     if(found < max_suggestions) {
         search_tier(&t9plus_state.tier4, last_word, suggestions, &found, max_suggestions);
     }
+    
+    FURI_LOG_D(TAG, "Found %d suggestions", found);
     
     return found;
 }
