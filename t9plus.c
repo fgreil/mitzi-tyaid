@@ -210,13 +210,20 @@ bool t9plus_is_word_char(char c) {
 // Helper: Case-insensitive prefix match
 static bool starts_with_ci(const char* word, const char* prefix) {
     size_t prefix_len = strlen(prefix);
-    if(strlen(word) < prefix_len) return false;
+    size_t word_len = strlen(word);
+    
+    if(word_len < prefix_len) {
+        return false;
+    }
     
     for(size_t i = 0; i < prefix_len; i++) {
-        if(tolower((unsigned char)word[i]) != tolower((unsigned char)prefix[i])) {
+        char w = tolower((unsigned char)word[i]);
+        char p = tolower((unsigned char)prefix[i]);
+        if(w != p) {
             return false;
         }
     }
+    
     return true;
 }
 
@@ -228,17 +235,23 @@ static void search_tier(
     uint8_t* found_count,
     uint8_t max_suggestions
 ) {
+    FURI_LOG_I(TAG, "search_tier: searching %zu words for prefix '%s'", tier->count, prefix);
     size_t matches_in_tier = 0;
+    
     for(size_t i = 0; i < tier->count && *found_count < max_suggestions; i++) {
         if(starts_with_ci(tier->words[i], prefix)) {
+            FURI_LOG_I(TAG, "  MATCH: '%s' matches '%s'", tier->words[i], prefix);
             strncpy(suggestions[*found_count], tier->words[i], T9PLUS_MAX_WORD_LENGTH - 1);
             suggestions[*found_count][T9PLUS_MAX_WORD_LENGTH - 1] = '\0';
             (*found_count)++;
             matches_in_tier++;
         }
     }
+    
     if(matches_in_tier > 0) {
-        FURI_LOG_D(TAG, "Found %zu matches in tier", matches_in_tier);
+        FURI_LOG_I(TAG, "search_tier: found %zu matches", matches_in_tier);
+    } else {
+        FURI_LOG_I(TAG, "search_tier: no matches found");
     }
 }
 
@@ -247,13 +260,16 @@ uint8_t t9plus_get_suggestions(
     char suggestions[T9PLUS_MAX_SUGGESTIONS][T9PLUS_MAX_WORD_LENGTH],
     uint8_t max_suggestions
 ) {
+    FURI_LOG_I(TAG, "=== get_suggestions called ===");
+    FURI_LOG_I(TAG, "Input buffer: '%s'", input ? input : "(null)");
+    
     if(!t9plus_state.initialized) {
-        FURI_LOG_W(TAG, "Not initialized");
+        FURI_LOG_W(TAG, "Not initialized!");
         return 0;
     }
     
     if(!input || strlen(input) == 0) {
-        FURI_LOG_D(TAG, "Empty input");
+        FURI_LOG_I(TAG, "Empty input, returning 0");
         return 0;
     }
     
@@ -264,6 +280,8 @@ uint8_t t9plus_get_suggestions(
     // Extract the last word from input - find start of last word
     const char* last_word_start = input;
     size_t input_len = strlen(input);
+    
+    FURI_LOG_I(TAG, "Input length: %zu", input_len);
     
     // Scan backwards from end to find last word boundary
     if(input_len > 0) {
@@ -284,7 +302,7 @@ uint8_t t9plus_get_suggestions(
         
         // Check if we have a valid word
         if(last_word_start >= word_end) {
-            FURI_LOG_D(TAG, "No word found in input");
+            FURI_LOG_I(TAG, "No word found in input");
             return 0;
         }
     }
@@ -300,30 +318,52 @@ uint8_t t9plus_get_suggestions(
     
     // Skip if last word is empty
     if(word_len == 0) {
-        FURI_LOG_D(TAG, "Empty word");
+        FURI_LOG_I(TAG, "Extracted word is empty");
         return 0;
     }
     
-    FURI_LOG_D(TAG, "Searching for prefix: '%s'", last_word);
+    FURI_LOG_I(TAG, "Searching for prefix: '%s' (length: %zu)", last_word, word_len);
+    FURI_LOG_I(TAG, "Tier sizes: tier1=%zu, tier2=%zu, tier3a=%zu, tier3b=%zu, tier4=%zu",
+        t9plus_state.tier1.count,
+        t9plus_state.tier2.count,
+        t9plus_state.tier3a.count,
+        t9plus_state.tier3b.count,
+        t9plus_state.tier4.count);
     
     uint8_t found = 0;
     
     // Search tiers in priority order: tier1, tier3a, tier3b, tier2, tier4
+    FURI_LOG_I(TAG, "Searching tier1...");
     search_tier(&t9plus_state.tier1, last_word, suggestions, &found, max_suggestions);
+    FURI_LOG_I(TAG, "After tier1: found=%d", found);
+    
     if(found < max_suggestions) {
+        FURI_LOG_I(TAG, "Searching tier3a...");
         search_tier(&t9plus_state.tier3a, last_word, suggestions, &found, max_suggestions);
+        FURI_LOG_I(TAG, "After tier3a: found=%d", found);
     }
     if(found < max_suggestions) {
+        FURI_LOG_I(TAG, "Searching tier3b...");
         search_tier(&t9plus_state.tier3b, last_word, suggestions, &found, max_suggestions);
+        FURI_LOG_I(TAG, "After tier3b: found=%d", found);
     }
     if(found < max_suggestions) {
+        FURI_LOG_I(TAG, "Searching tier2...");
         search_tier(&t9plus_state.tier2, last_word, suggestions, &found, max_suggestions);
+        FURI_LOG_I(TAG, "After tier2: found=%d", found);
     }
     if(found < max_suggestions) {
+        FURI_LOG_I(TAG, "Searching tier4...");
         search_tier(&t9plus_state.tier4, last_word, suggestions, &found, max_suggestions);
+        FURI_LOG_I(TAG, "After tier4: found=%d", found);
     }
     
-    FURI_LOG_D(TAG, "Found %d suggestions", found);
+    FURI_LOG_I(TAG, "=== Returning %d suggestions ===", found);
+    if(found > 0) {
+        for(uint8_t i = 0; i < found; i++) {
+            FURI_LOG_I(TAG, "  Suggestion %d: '%s'", i, suggestions[i]);
+        }
+    }
     
     return found;
 }

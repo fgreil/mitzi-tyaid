@@ -27,6 +27,7 @@ App(
 
     # Path to the app icon displayed in the menu
     fap_icon_assets="images",
+	fap_file_assets="data",
 
     # Format of the menu icon: Black-and-whit PNG (=1-bit color depth), 10x10 pixel
     fap_icon="images/icon_10x10.png",

@@ -86,11 +86,10 @@ static void t9_draw_callback(Canvas* canvas, void* context) {
         memset(suggestions, 0, sizeof(suggestions));
         
         uint8_t num_suggestions = t9plus_get_suggestions(app->text_buffer, suggestions, T9PLUS_MAX_SUGGESTIONS);
-        FURI_LOG_I(TAG, "Suggestions: %i", num_suggestions);
 		
         if(num_suggestions > 0) {
             canvas_set_font(canvas, FontSecondary);
-			const uint8_t sugg_y = divider_y - 9;
+			const uint8_t sugg_y = divider_y;
             
             // Build suggestion line with proper spacing
             FuriString* sugg_str = furi_string_alloc();
