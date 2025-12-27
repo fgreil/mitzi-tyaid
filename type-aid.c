@@ -3,8 +3,6 @@
 #include <gui/elements.h>                // UI elements like button hints
 #include <gui/modules/text_input.h>      // Standard text input keyboard module
 #include <gui/view_dispatcher.h>         // View management and navigation system
-
-// Include the generated icons from the images folder
 #include <mitzi_tyaid_icons.h>           // Auto-generated header for icons in images/ folder
 
 // Debug tag for logging
@@ -29,6 +27,7 @@ typedef struct {
     
     char text_buffer[TEXT_BUFFER_SIZE];
     bool in_text_input;  // Track which screen we're on
+	bool keyboard_used;  // Track if keyboard has been opened at least once
 } TypeAidApp;
 
 // ============================================================================
@@ -46,30 +45,37 @@ static void splash_draw_callback(Canvas* canvas, void* context) {
     
     canvas_clear(canvas);
     
+    // Draw splash icon only on first view (before keyboard is used)
+    if(!app->keyboard_used){
+        canvas_draw_icon(canvas, 50, 1, &I_splash);
+		canvas_set_font_direction(canvas, CanvasDirectionBottomToTop); // Set text rotation to 90 degrees 
+		canvas_draw_str(canvas, 128, 55, "f418.eu");		
+		canvas_set_font_direction(canvas, CanvasDirectionLeftToRight); // Reset to normal text direction
+    }
     // Draw icon and title at the top
     canvas_draw_icon(canvas, 1, 1, &I_icon_10x10);
     canvas_set_font(canvas, FontPrimary);
-    canvas_draw_str_aligned(canvas, 12, 1, AlignLeft, AlignTop, "Type Aid");
+    canvas_draw_str_aligned(canvas, 12, 1, AlignLeft, AlignTop, "Type Aid v0.1");
     
     canvas_set_color(canvas, ColorBlack);
     canvas_set_font(canvas, FontSecondary);
     
-    // Draw a box for the text display area
-    const uint8_t box_x = 1;
-    const uint8_t box_y = 16;
-    const uint8_t box_width = 106;
-    const uint8_t box_height = 35;
-    
-    canvas_draw_frame(canvas, box_x, box_y, box_width, box_height);
     
     // Display entered text inside the box (truncated, no scrolling)
     if(strlen(app->text_buffer) > 0) {
+		const uint8_t box_x = 0;
+		const uint8_t box_y = 16;
+		const uint8_t box_width = 128;
+		const uint8_t box_height = 35;
+		// Draw a box for the text display area
+		canvas_draw_frame(canvas, box_x, box_y, box_width, box_height);
+		
         const uint8_t text_padding = 2;
         const uint8_t line_height = 10;
         const uint8_t start_y = box_y + text_padding;
         const uint8_t max_lines = 3;
-        const uint8_t chars_per_line = 21;
-        
+        const uint8_t chars_per_line = 21;        
+	
         size_t text_len = strlen(app->text_buffer);
         uint8_t line = 0;
         size_t i = 0;
@@ -98,21 +104,15 @@ static void splash_draw_callback(Canvas* canvas, void* context) {
         }
     } else {
         // Show placeholder text when no input yet
-        canvas_draw_str_aligned(canvas, box_x + 3, box_y + 12, AlignLeft, AlignTop, "Just a keyboard?");
-        canvas_draw_str_aligned(canvas, box_x + 3, box_y + 22, AlignLeft, AlignTop, "You try it!");
-    }
-    
-    // Draw rotated date text on the right side
-    canvas_set_font_direction(canvas, CanvasDirectionBottomToTop);
-    canvas_draw_str(canvas, 128, 45, "2025-12");
-    canvas_set_font_direction(canvas, CanvasDirectionLeftToRight);
-    
-    // Draw author and version info
-    canvas_draw_str_aligned(canvas, 100, 54, AlignLeft, AlignTop, "F. Greil");
-    canvas_draw_str_aligned(canvas, 110, 1, AlignLeft, AlignTop, "v0.1");
-    
-    // Draw button hints at bottom
+        canvas_draw_str_aligned(canvas, 1, 17, AlignLeft, AlignTop, "Just another");
+        canvas_draw_str_aligned(canvas, 1, 26, AlignLeft, AlignTop, "keyboard?");
+    }	
+	
+
+    // Draw navigation hints at bottom
     elements_button_center(canvas, "OK");
+	canvas_draw_icon(canvas, 1, 55, &I_back);
+	canvas_draw_str_aligned(canvas, 11, 63, AlignLeft, AlignBottom, "Exit");	
     
     FURI_LOG_D(TAG, "splash_draw_callback: exit");
 }
@@ -189,7 +189,7 @@ static TypeAidApp* type_aid_app_alloc() {
     gui_add_view_port(app->gui, app->view_port, GuiLayerFullscreen);
     
     app->in_text_input = false;
-    
+    app->keyboard_used = false;  // Initially, keyboard hasn't been used
     FURI_LOG_I(TAG, "=== App allocation complete ===");
     return app;
 }
@@ -222,33 +222,29 @@ static void type_aid_app_free(TypeAidApp* app) {
 int32_t type_aid_main(void* p) {
     UNUSED(p);
     
-    FURI_LOG_I(TAG, "Type Aid app starting");
-    
+    FURI_LOG_I(TAG, "App TYAID starting");
     TypeAidApp* app = type_aid_app_alloc();
     InputEvent event;
     
-    FURI_LOG_I(TAG, "Entering main event loop");
-    
-    // Main event loop
+    FURI_LOG_I(TAG, "Entering main event loop"); // --------------------------
     while(1) {
         if(app->in_text_input) {
             // We're waiting for text input to finish
-            furi_delay_ms(100);
+            furi_delay_ms(100); 
         } else {
             // Normal splash screen event handling
             if(furi_message_queue_get(app->event_queue, &event, 100) == FuriStatusOk) {
                 FURI_LOG_D(TAG, "Event: type=%d key=%d", event.type, event.key);
                 
-                if(event.type == InputTypeShort) {
+                if(event.type == InputTypeShort || event.type == InputTypeLong) {
                     if(event.key == InputKeyBack) {
                         FURI_LOG_I(TAG, "Back pressed, exiting");
                         break;
                     }
                     else if(event.key == InputKeyOk) {
                         FURI_LOG_I(TAG, "OK pressed, showing text input");
-                        
-                        // Remove splash screen
-                        gui_remove_view_port(app->gui, app->view_port);
+                        app->keyboard_used = true; // Flag that keyboard has been used at least once
+                        gui_remove_view_port(app->gui, app->view_port); // Remove splash screen
                         
                         // Show text input
                         app->in_text_input = true;
@@ -267,10 +263,8 @@ int32_t type_aid_main(void* p) {
             view_port_update(app->view_port);
         }
     }
-    
     FURI_LOG_I(TAG, "Cleaning up");
     type_aid_app_free(app);
-    
-    FURI_LOG_I(TAG, "Type Aid app exiting");
+    FURI_LOG_I(TAG, "App exiting");
     return 0;
 }
