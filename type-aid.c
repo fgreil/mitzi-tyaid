@@ -1,100 +1,100 @@
-#include <furi.h>
-#include <gui/gui.h>
-#include <gui/elements.h>
-#include <gui/modules/text_input.h>
-#include <gui/view_dispatcher.h>
-#include <input/input.h>
+#include <furi.h>                        // Core Flipper Zero API (types, memory, threads)
+#include <gui/gui.h>                     // GUI system and canvas drawing functions
+#include <gui/elements.h>                // UI elements like button hints
+#include <gui/modules/text_input.h>      // Standard text input keyboard module
+#include <gui/view_dispatcher.h>         // View management and navigation system
 
-// Maximum text length for user input
+// Include the generated icons from the images folder
+#include <mitzi_tyaid_icons.h>           // Auto-generated header for icons in images/ folder
+
+// Debug tag for logging
+#define TAG "TypeAid"
+
+// ============================================================================
+// CONSTANTS AND CONFIGURATION
+// ============================================================================
+
 #define TEXT_BUFFER_SIZE 256
 
-// View IDs for the view dispatcher
-typedef enum {
-    ViewSplash,
-    ViewTextInput,
-} AppView;
+// ============================================================================
+// TYPES AND STRUCTURES
+// ============================================================================
 
-// App structure to hold all application data
 typedef struct {
-    ViewDispatcher* view_dispatcher;
-    ViewPort* splash_view_port;
+    Gui* gui;
+    ViewPort* view_port;
+    FuriMessageQueue* event_queue;
     TextInput* text_input;
+    ViewDispatcher* view_dispatcher;
     
-    char text_buffer[TEXT_BUFFER_SIZE];  // Buffer to store entered text
-    uint32_t scroll_offset;              // For scrolling text in the box
-} SimpleApp;
+    char text_buffer[TEXT_BUFFER_SIZE];
+    bool in_text_input;  // Track which screen we're on
+} TypeAidApp;
 
 // ============================================================================
-// SPLASH SCREEN
+// SPLASH SCREEN - DRAW CALLBACK
 // ============================================================================
 
-// Draw callback for splash screen
 static void splash_draw_callback(Canvas* canvas, void* context) {
-    SimpleApp* app = context;
+    FURI_LOG_D(TAG, "splash_draw_callback: enter");
+    TypeAidApp* app = context;
+    
+    if(!app) {
+        FURI_LOG_E(TAG, "splash_draw_callback: app is NULL!");
+        return;
+    }
+    
     canvas_clear(canvas);
     
     // Draw icon and title at the top
     canvas_draw_icon(canvas, 1, 1, &I_icon_10x10);
     canvas_set_font(canvas, FontPrimary);
-    canvas_draw_str_aligned(canvas, 12, 1, AlignLeft, AlignTop, "Simple App");
+    canvas_draw_str_aligned(canvas, 12, 1, AlignLeft, AlignTop, "Type Aid");
     
     canvas_set_color(canvas, ColorBlack);
     canvas_set_font(canvas, FontSecondary);
     
-    // Draw a box for the text display area (underneath title)
+    // Draw a box for the text display area
     const uint8_t box_x = 1;
     const uint8_t box_y = 16;
-    const uint8_t box_width = 106;  // Leave room for the rotated date
+    const uint8_t box_width = 106;
     const uint8_t box_height = 35;
     
-    // Draw the box frame
     canvas_draw_frame(canvas, box_x, box_y, box_width, box_height);
     
-    // Display entered text inside the box, or placeholder text
+    // Display entered text inside the box (truncated, no scrolling)
     if(strlen(app->text_buffer) > 0) {
-        // Draw the entered text in a scrollable area inside the box
         const uint8_t text_padding = 2;
         const uint8_t line_height = 10;
         const uint8_t start_y = box_y + text_padding;
-        const uint8_t max_lines = 3;  // Number of visible lines in the box
-        const uint8_t chars_per_line = 21;  // Characters that fit in the box width
+        const uint8_t max_lines = 3;
+        const uint8_t chars_per_line = 21;
         
         size_t text_len = strlen(app->text_buffer);
-        
-        // Draw text line by line with scrolling
         uint8_t line = 0;
-        for(size_t i = app->scroll_offset; i < text_len && line < max_lines; line++) {
+        size_t i = 0;
+        
+        while(line < max_lines && i < text_len) {
             char line_buffer[chars_per_line + 1];
             size_t chars_to_copy = 0;
             
-            // Copy characters for this line
-            while(chars_to_copy < chars_per_line && (i + chars_to_copy) < text_len) {
-                line_buffer[chars_to_copy] = app->text_buffer[i + chars_to_copy];
+            while(chars_to_copy < chars_per_line && i < text_len) {
+                line_buffer[chars_to_copy] = app->text_buffer[i];
                 chars_to_copy++;
+                i++;
             }
             line_buffer[chars_to_copy] = '\0';
             
-            // Draw the line inside the box
             canvas_draw_str_aligned(
-                canvas, 
-                box_x + text_padding, 
-                start_y + (line * line_height), 
-                AlignLeft, 
-                AlignTop, 
+                canvas,
+                box_x + text_padding,
+                start_y + (line * line_height),
+                AlignLeft,
+                AlignTop,
                 line_buffer
             );
             
-            i += chars_to_copy;
-        }
-        
-        // Show scroll indicators if text is longer than visible area
-        if(app->scroll_offset > 0) {
-            // Up arrow - can scroll up
-            canvas_draw_str(canvas, box_x + box_width - 8, box_y + 8, "^");
-        }
-        if(app->scroll_offset + (chars_per_line * max_lines) < text_len) {
-            // Down arrow - can scroll down
-            canvas_draw_str(canvas, box_x + box_width - 8, box_y + box_height - 8, "v");
+            line++;
         }
     } else {
         // Show placeholder text when no input yet
@@ -113,153 +113,164 @@ static void splash_draw_callback(Canvas* canvas, void* context) {
     
     // Draw button hints at bottom
     elements_button_center(canvas, "OK");
+    
+    FURI_LOG_D(TAG, "splash_draw_callback: exit");
 }
 
-// Input callback for splash screen
+// ============================================================================
+// SPLASH SCREEN - INPUT CALLBACK
+// ============================================================================
+
 static void splash_input_callback(InputEvent* input_event, void* context) {
-    SimpleApp* app = context;
-    
-    if(input_event->type == InputTypeShort || input_event->type == InputTypeRepeat) {
-        if(input_event->key == InputKeyOk) {
-            // OK button: open keyboard to enter/edit text
-            view_dispatcher_switch_to_view(app->view_dispatcher, ViewTextInput);
-        }
-        else if(input_event->key == InputKeyBack) {
-            // Back button: exit app
-            view_dispatcher_stop(app->view_dispatcher);
-        }
-        else if(input_event->key == InputKeyUp) {
-            // Scroll up in the text box
-            if(app->scroll_offset > 0) {
-                app->scroll_offset -= 21;  // Scroll by one line's worth of characters
-                if(app->scroll_offset < 0) app->scroll_offset = 0;
-                view_port_update(app->splash_view_port);
-            }
-        }
-        else if(input_event->key == InputKeyDown) {
-            // Scroll down in the text box
-            size_t text_len = strlen(app->text_buffer);
-            if(app->scroll_offset + 63 < text_len) {  // 63 = 21 chars * 3 lines
-                app->scroll_offset += 21;
-                view_port_update(app->splash_view_port);
-            }
-        }
-    }
+    TypeAidApp* app = context;
+    furi_message_queue_put(app->event_queue, input_event, FuriWaitForever);
 }
 
 // ============================================================================
-// TEXT INPUT (KEYBOARD)
+// TEXT INPUT - CALLBACK
 // ============================================================================
 
-// Callback when text input is complete (user pressed OK on keyboard)
 static void text_input_callback(void* context) {
-    SimpleApp* app = context;
+    FURI_LOG_I(TAG, "text_input_callback: text entered");
+    TypeAidApp* app = context;
     
-    // Reset scroll offset when new text is entered
-    app->scroll_offset = 0;
+    if(!app) {
+        FURI_LOG_E(TAG, "text_input_callback: app is NULL!");
+        return;
+    }
     
-    // Return to splash screen to show the entered text
-    view_dispatcher_switch_to_view(app->view_dispatcher, ViewSplash);
+    FURI_LOG_I(TAG, "Text entered: '%s'", app->text_buffer);
+    
+    // Stop the view dispatcher to return to main loop
+    view_dispatcher_stop(app->view_dispatcher);
 }
 
 // ============================================================================
-// VIEW DISPATCHER CALLBACKS
+// APP LIFECYCLE - ALLOCATION
 // ============================================================================
 
-// Custom event callback (not used in this simple app, but required)
-static bool navigation_event_callback(void* context) {
-    UNUSED(context);
-    return false;
-}
-
-// Back event callback for the view dispatcher
-static uint32_t view_exit_callback(void* context) {
-    UNUSED(context);
-    return VIEW_NONE;
-}
-
-// ============================================================================
-// APP LIFECYCLE
-// ============================================================================
-
-// Allocate and initialize the app
-static SimpleApp* simple_app_alloc() {
-    SimpleApp* app = malloc(sizeof(SimpleApp));
+static TypeAidApp* type_aid_app_alloc() {
+    FURI_LOG_I(TAG, "=== App allocation started ===");
     
-    // Initialize text buffer
-    memset(app->text_buffer, 0, TEXT_BUFFER_SIZE);
-    app->scroll_offset = 0;
+    TypeAidApp* app = malloc(sizeof(TypeAidApp));
+    memset(app, 0, sizeof(TypeAidApp));
     
-    // Create view dispatcher
+    FURI_LOG_D(TAG, "Opening GUI");
+    app->gui = furi_record_open(RECORD_GUI);
+    
+    FURI_LOG_D(TAG, "Creating event queue");
+    app->event_queue = furi_message_queue_alloc(8, sizeof(InputEvent));
+    
+    FURI_LOG_D(TAG, "Creating viewport for splash");
+    app->view_port = view_port_alloc();
+    view_port_draw_callback_set(app->view_port, splash_draw_callback, app);
+    view_port_input_callback_set(app->view_port, splash_input_callback, app);
+    
+    FURI_LOG_D(TAG, "Creating view dispatcher");
     app->view_dispatcher = view_dispatcher_alloc();
-    view_dispatcher_enable_queue(app->view_dispatcher);
     
-    // Set up splash screen view
-    app->splash_view_port = view_port_alloc();
-    view_port_draw_callback_set(app->splash_view_port, splash_draw_callback, app);
-    view_port_input_callback_set(app->splash_view_port, splash_input_callback, app);
-    view_dispatcher_add_view(app->view_dispatcher, ViewSplash, view_port_to_view(app->splash_view_port));
-    
-    // Set up text input (keyboard) view
+    FURI_LOG_D(TAG, "Creating text input");
     app->text_input = text_input_alloc();
+    text_input_set_header_text(app->text_input, "Enter your text:");
     text_input_set_result_callback(
         app->text_input,
         text_input_callback,
         app,
         app->text_buffer,
         TEXT_BUFFER_SIZE,
-        true  // Clear text on start
+        false
     );
-    text_input_set_header_text(app->text_input, "Enter your text:");
-    view_set_previous_callback(text_input_get_view(app->text_input), view_exit_callback);
-    view_dispatcher_add_view(app->view_dispatcher, ViewTextInput, text_input_get_view(app->text_input));
     
-    // Attach view dispatcher to GUI
-    Gui* gui = furi_record_open(RECORD_GUI);
-    view_dispatcher_attach_to_gui(app->view_dispatcher, gui, ViewDispatcherTypeFullscreen);
+    // Add text input to view dispatcher
+    view_dispatcher_add_view(app->view_dispatcher, 1, text_input_get_view(app->text_input));
+    view_dispatcher_attach_to_gui(app->view_dispatcher, app->gui, ViewDispatcherTypeFullscreen);
     
-    // Start with splash screen
-    view_dispatcher_switch_to_view(app->view_dispatcher, ViewSplash);
+    FURI_LOG_D(TAG, "Adding splash viewport to GUI");
+    gui_add_view_port(app->gui, app->view_port, GuiLayerFullscreen);
     
+    app->in_text_input = false;
+    
+    FURI_LOG_I(TAG, "=== App allocation complete ===");
     return app;
 }
 
-// Free app resources
-static void simple_app_free(SimpleApp* app) {
-    // Remove views from dispatcher
-    view_dispatcher_remove_view(app->view_dispatcher, ViewSplash);
-    view_dispatcher_remove_view(app->view_dispatcher, ViewTextInput);
+// ============================================================================
+// APP LIFECYCLE - CLEANUP
+// ============================================================================
+
+static void type_aid_app_free(TypeAidApp* app) {
+    FURI_LOG_I(TAG, "=== App cleanup started ===");
     
-    // Free views
-    view_port_free(app->splash_view_port);
+    gui_remove_view_port(app->gui, app->view_port);
+    view_port_free(app->view_port);
+    
+    view_dispatcher_remove_view(app->view_dispatcher, 1);
     text_input_free(app->text_input);
-    
-    // Free view dispatcher
     view_dispatcher_free(app->view_dispatcher);
     
-    // Close GUI record
+    furi_message_queue_free(app->event_queue);
     furi_record_close(RECORD_GUI);
-    
-    // Free app structure
     free(app);
+    
+    FURI_LOG_I(TAG, "=== App cleanup complete ===");
 }
 
 // ============================================================================
 // MAIN ENTRY POINT
 // ============================================================================
 
-// Main app entry point - matches the entry_point in application.fam
 int32_t type_aid_main(void* p) {
     UNUSED(p);
     
-    // Allocate app
-    SimpleApp* app = simple_app_alloc();
+    FURI_LOG_I(TAG, "Type Aid app starting");
     
-    // Run the view dispatcher (blocks until app exits)
-    view_dispatcher_run(app->view_dispatcher);
+    TypeAidApp* app = type_aid_app_alloc();
+    InputEvent event;
     
-    // Clean up and free resources
-    simple_app_free(app);
+    FURI_LOG_I(TAG, "Entering main event loop");
     
+    // Main event loop
+    while(1) {
+        if(app->in_text_input) {
+            // We're waiting for text input to finish
+            furi_delay_ms(100);
+        } else {
+            // Normal splash screen event handling
+            if(furi_message_queue_get(app->event_queue, &event, 100) == FuriStatusOk) {
+                FURI_LOG_D(TAG, "Event: type=%d key=%d", event.type, event.key);
+                
+                if(event.type == InputTypeShort) {
+                    if(event.key == InputKeyBack) {
+                        FURI_LOG_I(TAG, "Back pressed, exiting");
+                        break;
+                    }
+                    else if(event.key == InputKeyOk) {
+                        FURI_LOG_I(TAG, "OK pressed, showing text input");
+                        
+                        // Remove splash screen
+                        gui_remove_view_port(app->gui, app->view_port);
+                        
+                        // Show text input
+                        app->in_text_input = true;
+                        view_dispatcher_switch_to_view(app->view_dispatcher, 1);
+                        view_dispatcher_run(app->view_dispatcher);
+                        
+                        // Text input finished, show splash again
+                        FURI_LOG_I(TAG, "Text input closed, returning to splash");
+                        app->in_text_input = false;
+                        gui_add_view_port(app->gui, app->view_port, GuiLayerFullscreen);
+                        view_port_update(app->view_port);
+                    }
+                }
+            }
+            
+            view_port_update(app->view_port);
+        }
+    }
+    
+    FURI_LOG_I(TAG, "Cleaning up");
+    type_aid_app_free(app);
+    
+    FURI_LOG_I(TAG, "Type Aid app exiting");
     return 0;
 }
